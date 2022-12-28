@@ -1,124 +1,4 @@
-#include <stdio.h>
-#include <stdint.h>
-
-#define CHECK(call)\
-{\
-    const cudaError_t error = call;\
-    if (error != cudaSuccess)\
-    {\
-        fprintf(stderr, "Error: %s:%d, ", __FILE__, __LINE__);\
-        fprintf(stderr, "code: %d, reason: %s\n", error,\
-                cudaGetErrorString(error));\
-        exit(1);\
-    }\
-}
-
-void readPnm(char * fileName, int &width, int &height, uchar3 * &pixels)
-{
-	FILE * f = fopen(fileName, "r");
-	if (f == NULL)
-	{
-		printf("Cannot read %s\n", fileName);
-		exit(EXIT_FAILURE);
-	}
-
-	char type[3];
-	fscanf(f, "%s", type);
-	
-	if (strcmp(type, "P3") != 0) // In this exercise, we don't touch other types
-	{
-		fclose(f);
-		printf("Cannot read %s\n", fileName); 
-		exit(EXIT_FAILURE); 
-	}
-
-	fscanf(f, "%i", &width);
-	fscanf(f, "%i", &height);
-	
-	int max_val;
-	fscanf(f, "%i", &max_val);
-	if (max_val > 255) // In this exercise, we assume 1 byte per value
-	{
-		fclose(f);
-		printf("Cannot read %s\n", fileName); 
-		exit(EXIT_FAILURE); 
-	}
-
-	pixels = (uchar3 *)malloc(width * height * sizeof(uchar3));
-	for (int i = 0; i < width * height; i++)
-		fscanf(f, "%hhu%hhu%hhu", &pixels[i].x, &pixels[i].y, &pixels[i].z);
-
-	fclose(f);
-}
-
-// void writePnm(uchar3 * pixels, int width, int height, char * fileName)
-// {
-// 	FILE * f = fopen(fileName, "w");
-// 	if (f == NULL)
-// 	{
-// 		printf("Cannot write %s\n", fileName);
-// 		exit(EXIT_FAILURE);
-// 	}	
-
-// 	fprintf(f, "P3\n%i\n%i\n255\n", width, height); 
-
-// 	for (int i = 0; i < width * height; i++)
-// 		fprintf(f, "%hhu\n%hhu\n%hhu\n", pixels[i].x, pixels[i].y, pixels[i].z);
-	
-// 	fclose(f);
-// }
-
-void writePnm(uint8_t * pixels, int numChannels, int width, int height, 
-		char * fileName)
-{
-	FILE * f = fopen(fileName, "w");
-	if (f == NULL)
-	{
-		printf("Cannot write %s\n", fileName);
-		exit(EXIT_FAILURE);
-	}	
-
-	if (numChannels == 1)
-		fprintf(f, "P2\n");
-	else if (numChannels == 3)
-		fprintf(f, "P3\n");
-	else
-	{
-		fclose(f);
-		printf("Cannot write %s\n", fileName);
-		exit(EXIT_FAILURE);
-	}
-
-	fprintf(f, "%i\n%i\n255\n", width, height); 
-
-	for (int i = 0; i < width * height * numChannels; i++)
-		fprintf(f, "%hhu\n", pixels[i]);
-
-	fclose(f);
-}
-
-char * concatStr(const char * s1, const char * s2){
-	char * result = (char *)malloc(strlen(s1) + strlen(s2) + 1);
-	strcpy(result, s1);
-	strcat(result, s2);
-	return result;
-}
-
-void printDeviceInfo()
-{
-    cudaDeviceProp devProv;
-    CHECK(cudaGetDeviceProperties(&devProv, 0));
-    printf("**********GPU info**********\n");
-    printf("Name: %s\n", devProv.name);
-    printf("Compute capability: %d.%d\n", devProv.major, devProv.minor);
-    printf("Num SMs: %d\n", devProv.multiProcessorCount);
-    printf("Max num threads per SM: %d\n", devProv.maxThreadsPerMultiProcessor); 
-    printf("Max num warps per SM: %d\n", devProv.maxThreadsPerMultiProcessor / devProv.warpSize);
-    printf("GMEM: %zu byte\n", devProv.totalGlobalMem);
-    printf("SMEM per SM: %zu byte\n", devProv.sharedMemPerMultiprocessor);
-    printf("SMEM per block: %zu byte\n", devProv.sharedMemPerBlock);
-    printf("****************************\n");
-}
+#include "support.h"
 
 void convert_RGB_to_gray(uchar3* in_pixels, uint8_t* out_pixels, int width, int height){
 	for(int r = 0; r < height; r++){
@@ -132,7 +12,7 @@ void convert_RGB_to_gray(uchar3* in_pixels, uint8_t* out_pixels, int width, int 
 	}
 }
 
-void conv_sobel(uint8_t* gray_image, uint8_t* energy_image, int width, int height){
+void conv_sobel(uint8_t* gray_image, uint32_t* energy_image, int width, int height){
 	// x-sobel
 	int x_sobel[9] = { 1,  0, -1,
 					   2,  0, -2,
@@ -156,9 +36,9 @@ void conv_sobel(uint8_t* gray_image, uint8_t* energy_image, int width, int heigh
 	}
 }
 
-int find_seam(uint8_t* energy_image, uint8_t* back_tracking, int width, int height){
-	uint8_t* energy_reduce = (uint8_t*)malloc(width * height);
-	int col_start_seam, energy_start_seam = INT8_MAX;
+int find_seam(uint32_t* energy_image, uint32_t* back_tracking, int width, int height){
+	uint32_t* energy_reduce = (uint32_t*)malloc(width * height * sizeof(uint32_t));
+	uint32_t col_start_seam, energy_start_seam = UINT32_MAX;
 	for(int row = 0; row < height; row++){
 		for(int col = 0; col < width; col++){
 			int p = row * width + col;
@@ -189,6 +69,70 @@ int find_seam(uint8_t* energy_image, uint8_t* back_tracking, int width, int heig
 	return col_start_seam;
 }
 
+void highlight_seam(uchar3* original_image, uchar3* image_with_seam, int width, int height, uint32_t* back_tracking, int col_start_seam){
+	for(int row = 0; row < height; row++){
+		for(int col = 0; col < width; col++){
+			int i = row * width + col;
+			image_with_seam[i] = original_image[i];
+		}
+	}
+	for(int row = height - 1; row > -1; row--){
+		image_with_seam[(row * width + col_start_seam)] = make_uchar3(255, 0, 0);
+		col_start_seam = back_tracking[row * width + col_start_seam];
+	}
+}
+
+void remove_seam(uchar3* original_image, uchar3* removed_seam, int width, int height, uint32_t* back_tracking, int col_start_seam){
+	for(int row = height - 1; row > -1; row--){
+		for(int col = 0; col < width - 1; col++){
+			int i = row * width + col;
+			if(col < col_start_seam)
+				removed_seam[(width - 1) * row + col] = original_image[i];
+			else
+				removed_seam[(width - 1) * row + col] = original_image[i + 1];
+		}
+		col_start_seam = back_tracking[row * width + col_start_seam];
+	}
+}
+
+void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int height, int n_seams){
+	uchar3* in_image = (uchar3*)malloc(width * height * sizeof(uchar3));
+	uchar3* free_later = in_image;
+	memcpy(in_image, original_image, sizeof(uchar3) * width * height);
+		uchar3* removed_seam = (uchar3*)malloc((width - 1) * height * sizeof(uchar3));
+		uint8_t* gray_image = (uint8_t*)malloc(width * height);
+		uint32_t* energy_image = (uint32_t*)malloc(width * height * sizeof(uint32_t));
+		uint32_t* back_tracking = (uint32_t*)malloc(width * height * sizeof(uint32_t));
+	for(int i = 0; i < n_seams; i++){
+		printf("%.2f\n", (float)i/n_seams * 100);
+		convert_RGB_to_gray(in_image, gray_image, width, height);
+
+		conv_sobel(gray_image, energy_image, width, height);
+
+		int col_start_seam = find_seam(energy_image, back_tracking, width, height);
+
+		remove_seam(in_image, removed_seam, width, height, back_tracking, col_start_seam);
+		uchar3* temp = in_image;
+		in_image = removed_seam;
+		removed_seam = temp;
+		// if(i != n_seams - 1)
+		// 	free(in_image);	
+		width -= 1;
+		// printf("removed seam width %i height %i\n",width,height);
+		// for(int i=0;i<width*height;i++){
+		// 	printf("%hhu %hhu %hhu", in_image[i].x, in_image[i].y, in_image[i].z);
+		// 	printf("\n");
+		// }
+		// printf("\n");
+	}
+		free(gray_image);
+		free(energy_image);
+		free(back_tracking);
+		free(removed_seam);
+	memcpy(out_image, in_image, sizeof(uchar3) * width * height);
+	free(in_image);
+}
+
 int main(int argc, char** argv){
     printDeviceInfo();
 	int width, height;
@@ -197,39 +141,39 @@ int main(int argc, char** argv){
 	printf("Image size (width x height): %i x %i\n\n", width, height);
 
 	uint8_t* gray_image = (uint8_t*)malloc(width * height);
-
 	convert_RGB_to_gray(original_image, gray_image, width, height);
 
-	uint8_t* energy_image = (uint8_t*)malloc(width * height);
+	uint32_t* energy_image = (uint32_t*)malloc(width * height * sizeof(uint32_t));
 	conv_sobel(gray_image, energy_image, width, height);
 
-	uint8_t* back_tracking = (uint8_t*)malloc(width * height);
+	uint32_t* back_tracking = (uint32_t*)malloc(width * height * sizeof(uint32_t));
 	int col_start_seam = find_seam(energy_image, back_tracking, width, height);
 
-	uint8_t* image_with_seam = (uint8_t*)malloc(width * height * 3);
-	for(int row = 0; row < height; row++){
-		for(int col = 0; col < width; col++){
-			int i = row * width + col;
-			image_with_seam[3 * i] = original_image[i].x;
-			image_with_seam[3 * i + 1] = original_image[i].y;
-			image_with_seam[3 * i + 2] = original_image[i].z;
-		}
-	}
-	for(int row = height - 1; row > -1; row--){
-		image_with_seam[3 * (row * width + col_start_seam)] = 255;
-		image_with_seam[3 * (row * width + col_start_seam) + 1] = 0;
-		image_with_seam[3 * (row * width + col_start_seam) + 2] = 0;
-		col_start_seam = back_tracking[row * width + col_start_seam];
-	}
+	uchar3* image_with_seam = (uchar3*)malloc(width * height * sizeof(uchar3));
+	highlight_seam(original_image, image_with_seam, width, height, back_tracking, col_start_seam);
+
+	int n_seams = 1000;
+	uchar3* output_image = (uchar3*)malloc((width - n_seams) * height * sizeof(uchar3));
+	remove_n_seam(original_image, output_image, width, height, n_seams);
 
 	char* file_name_out  = strtok(argv[1], ".");
-	writePnm(gray_image, 1, width, height, concatStr(file_name_out,"_gray_host.pnm"));
-	writePnm(energy_image, 1, width, height, concatStr(file_name_out,"_energy_host.pnm"));
-	writePnm(image_with_seam, 3, width, height, concatStr(file_name_out,"_seam_host.pnm"));
+	// writePnm(gray_image, 1, width, height, concatStr(file_name_out,"_gray_host.pnm"));
+	// writePnm(energy_image, 1, width, height, concatStr(file_name_out,"_energy_host.pnm"));
+	writePnm(image_with_seam, width, height, concatStr(file_name_out,"_seam_host.pnm"));
+	writePnm(output_image, width - n_seams, height, concatStr(file_name_out,"_out_host.pnm"));
+
+	// uchar3* output_image = (uchar3*)malloc((width - 1) * height * sizeof(uchar3));
+	// remove_seam(original_image, output_image, width, height, back_tracking, col_start_seam);
+	// writePnm(image_with_seam, width, height, "seam.pnm");
+	// writePnm(output_image, width - 1, height, "out.pnm");
+
+	// printf("success");
 
 	free(original_image);
 	free(gray_image);
 	free(energy_image);
+	free(back_tracking);
 	free(image_with_seam);
+	free(output_image);
     return EXIT_SUCCESS;
 }
