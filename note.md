@@ -10,7 +10,7 @@ A. Tuần tự
 
 B. Song song
     1. chuyển ảnh RGB sang grey -> done
-    2. edge detect -> done
+    2. sobel
     3. quy hoạch động ra ma trận các seam
     4. tìm seam nhỏ nhất trên hàng cuối
     5. backtracking

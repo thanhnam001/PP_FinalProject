@@ -18,6 +18,9 @@ __global__ void conv_sobel(uint8_t* gray_image, uint32_t* energy_image, int widt
 	short int y_sobel[9] = { 1,  2,  1,
 					         0,  0,  0,
 					        -1, -2, -1};
+
+    // load grey_image vào shared memory??? --> device2
+
     if(row < height && col < width){
         int x = 0, y = 0;
         for(int r = 0; r < 3; r++){
