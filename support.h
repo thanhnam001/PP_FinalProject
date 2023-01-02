@@ -58,6 +58,8 @@ void readPnm(char * fileName, int &numChannels, int &width, int &height, uint8_t
 void readPnm(char * fileName, int &width, int &height, uchar3 * &pixels);
 void writePnm(uchar3 * pixels, int width, int height, char * fileName);
 void writePnm(uint8_t * pixels, int numChannels, int width, int height, char * fileName);
+void writePnm(uint32_t * pixels, int numChannels, int width, int height, 
+		char * fileName);
 char * concatStr(const char * s1, const char * s2);
 void printDeviceInfo();
 

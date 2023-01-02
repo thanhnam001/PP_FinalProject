@@ -126,6 +126,35 @@ void writePnm(uint8_t * pixels, int numChannels, int width, int height,
 	fclose(f);
 }
 
+void writePnm(uint32_t * pixels, int numChannels, int width, int height, 
+		char * fileName)
+{
+	FILE * f = fopen(fileName, "w");
+	if (f == NULL)
+	{
+		printf("Cannot write %s\n", fileName);
+		exit(EXIT_FAILURE);
+	}	
+
+	if (numChannels == 1)
+		fprintf(f, "P2\n");
+	else if (numChannels == 3)
+		fprintf(f, "P3\n");
+	else
+	{
+		fclose(f);
+		printf("Cannot write %s\n", fileName);
+		exit(EXIT_FAILURE);
+	}
+
+	fprintf(f, "%i\n%i\n255\n", width, height); 
+
+	for (int i = 0; i < width * height * numChannels; i++)
+		fprintf(f, "%hhu\n", pixels[i]);
+
+	fclose(f);
+}
+
 char * concatStr(const char * s1, const char * s2){
 	char * result = (char *)malloc(strlen(s1) + strlen(s2) + 1);
 	strcpy(result, s1);
