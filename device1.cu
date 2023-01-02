@@ -168,6 +168,8 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
         d_original_image = d_output_image;
         d_output_image = temp;
         width -= 1;
+
+        // remove seam trên cả grey image để cắt bỏ bớt bước convert_to_grey  --> device2
     }
     
     CHECK(cudaMemcpy(out_image, d_original_image, sizeof(uchar3) * width * height, cudaMemcpyDeviceToHost));
