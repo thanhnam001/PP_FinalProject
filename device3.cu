@@ -33,16 +33,16 @@ __global__ void convert_RGB_to_energy(uchar3* original_image, uint32_t* energy_i
 			shared_image[s_row * s_size + blockDim.x + 1] = original_image[row * width + right];
             if (threadIdx.y == 0) {
                 // 4 corners of padding
-                shared_image[0] = inPixels[top * width + left];
-				shared_image[blockDim.x + 1] = inPixels[top * width + right];
-				shared_image[(blockDim.y + 1) * s_size] = inPixels[bottom * width + left];
-				shared_image[(blockDim.y + 1) * s_size + blockDim.x + 1] = inPixels[bottom * width + right];
+                shared_image[0] = original_image[top * width + left];
+				shared_image[blockDim.x + 1] = original_image[top * width + right];
+				shared_image[(blockDim.y + 1) * s_size] = original_image[bottom * width + left];
+				shared_image[(blockDim.y + 1) * s_size + blockDim.x + 1] = original_image[bottom * width + right];
             }
         }
         if (threadIdx.y == 0) {
             // top and bottom edge in s_col
-            shared_image[1] = inPixels[top * width + col];
-			shared_image[(blockDim.y + 1) * s_size + 1] = inPixels[bottom * width + col];
+            shared_image[1] = original_image[top * width + col];
+			shared_image[(blockDim.y + 1) * s_size + 1] = original_image[bottom * width + col];
         }
 
         __syncthreads();
@@ -169,7 +169,7 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
         CHECK(cudaMemcpyToSymbol(b_count1, &z, sizeof(int)));
 
         // Convert RGB to gray and calculate energy
-        convert_RGB_to_energy<<<grid_size2d, block_size2d, (blockSize.x + 2) * (blockSize.y + 2) * sizeof(uchar3)>>>(d_original_image, d_energy_image, width, height);
+        convert_RGB_to_energy<<<grid_size2d, block_size2d, (block_size2d.x + 2) * (block_size2d.y + 2) * sizeof(uchar3)>>>(d_original_image, d_energy_image, width, height);
         
         // Find all seam (from top row to bottom row)
         for(int row = 1; row < height; row++)
