@@ -1,15 +1,6 @@
 #include "support.h"
 
-__global__ void convert_RGB_to_gray(uchar3* original_image, uint8_t* gray_image, int width, int height){
-    int row = blockDim.y * blockIdx.y + threadIdx.y;
-    int col = blockDim.x * blockIdx.x + threadIdx.x;
-    if(row < height && col < width){
-        int i = row * width + col;
-        gray_image[i] = 0.299f * original_image[i].x + 0.587f * original_image[i].y + 0.114f * original_image[i].z;
-    }
-}
-
-__global__ void conv_sobel(uint8_t* gray_image, uint32_t* energy_image, int width, int height){
+__global__ void convert_RGB_to_energy(uchar3* original_image, uint32_t* energy_image, int width, int height){
     int row = blockDim.y * blockIdx.y + threadIdx.y;
     int col = blockDim.x * blockIdx.x + threadIdx.x;
     short int x_sobel[9] = { 1,  0, -1,
@@ -24,8 +15,9 @@ __global__ void conv_sobel(uint8_t* gray_image, uint32_t* energy_image, int widt
             for(int c = 0; c < 3; c++){
                 int rc = min(max(row - 1 + r, 0), height - 1); 
                 int cc = min(max(col - 1 + c, 0), width - 1);
-                x += gray_image[rc * width + cc] * x_sobel[r * 3 + c];
-                y += gray_image[rc * width + cc] * y_sobel[r * 3 + c];
+                uint32_t gray_pixel = 0.299f * original_image[rc * width + cc].x + 0.587f * original_image[rc * width + cc].y + 0.114f * original_image[rc * width + cc].z;
+                x += gray_pixel * x_sobel[r * 3 + c];
+                y += gray_pixel * y_sobel[r * 3 + c];
             }
         }
         energy_image[row * width + col] = abs(x) + abs(y);
@@ -109,19 +101,16 @@ __global__ void remove_seam(uchar3* in_image, uchar3* out_image, int width, int 
 }
 void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int height, int n_seams){
     uchar3 *d_original_image;
-    uint8_t *d_gray_image;
     uint32_t *d_energy_image;
     uint32_t *d_back_tracking;
     uint32_t *d_seam;
     uchar3 * d_output_image;
     uint32_t *minn, *min_indices;
     size_t n_bytes_uchar3 = width * height * sizeof(uchar3);
-    size_t n_bytes_uint8t = width * height * sizeof(uint8_t);
     size_t n_bytes_uint32t = width * height * sizeof(uint32_t);
     size_t n_bytes_row = width * sizeof(uint32_t);
     size_t n_bytes_height = height * sizeof(uint32_t);
     CHECK(cudaMalloc(&d_original_image, n_bytes_uchar3));
-    CHECK(cudaMalloc(&d_gray_image, n_bytes_uint8t));
     CHECK(cudaMalloc(&d_energy_image, n_bytes_uint32t));
     CHECK(cudaMalloc(&d_back_tracking, n_bytes_uint32t));
     CHECK(cudaMalloc(&d_seam, n_bytes_height));
@@ -141,11 +130,8 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
         CHECK(cudaMemcpyToSymbol(b_count , &z, sizeof(int)));
         CHECK(cudaMemcpyToSymbol(b_count1, &z, sizeof(int)));
 
-        // Convert RGB to gray
-        convert_RGB_to_gray<<<grid_size2d, block_size2d>>>(d_original_image, d_gray_image, width, height);
-
-        // Calculate energy image
-        conv_sobel<<<grid_size2d, block_size2d>>>(d_gray_image, d_energy_image, width, height);
+        // Convert RGB to gray and calculate energy
+        convert_RGB_to_energy<<<grid_size2d, block_size2d>>>(d_original_image, d_energy_image, width, height);
         
         // Find all seam (from top row to bottom row)
         for(int row = 1; row < height; row++)
@@ -173,7 +159,6 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
     CHECK(cudaMemcpy(out_image, d_original_image, sizeof(uchar3) * width * height, cudaMemcpyDeviceToHost));
 
     CHECK(cudaFree(d_original_image));
-    CHECK(cudaFree(d_gray_image));
     CHECK(cudaFree(d_energy_image));
     CHECK(cudaFree(d_back_tracking));
     CHECK(cudaFree(d_seam));
@@ -200,7 +185,7 @@ int main(int argc, char** argv){
 	timer.Stop();
     printf("Time: %.3f ms\n", timer.Elapsed());
 
-    writePnm(output_image, width - n_seams, height, concatStr(file_name_out,"_device1.pnm"));
+    writePnm(output_image, width - n_seams, height, concatStr(file_name_out,"_device2.pnm"));
 
     free(original_image);
     free(output_image);
