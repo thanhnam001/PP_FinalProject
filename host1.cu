@@ -41,8 +41,10 @@ int find_seam(uint32_t* energy_image, uint32_t* back_tracking, int width, int he
 	for(int row = 0; row < height; row++){
 		for(int col = 0; col < width; col++){
 			int p = row * width + col;
-			if(row != 0){
+			if(row != 0){	// for từ row=1 luôn ko cần if???
 				uint32_t temp = UINT32_MAX;
+
+				// update - ko cần for
 				for(int i = -1; i < 2; i++){
 					int upper_col = min(max(col + i, 0), width - 1);
 					if(energy_image[(row - 1) * width + upper_col] < temp){
@@ -51,6 +53,7 @@ int find_seam(uint32_t* energy_image, uint32_t* back_tracking, int width, int he
 					}
 				}
 				energy_image[p] = energy_image[p] + temp;
+
 				if(row == height - 1 && energy_image[p] < energy_start_seam){
 					energy_start_seam = energy_image[p];
 					col_start_seam = col;
@@ -60,6 +63,8 @@ int find_seam(uint32_t* energy_image, uint32_t* back_tracking, int width, int he
 	}
 	return col_start_seam;
 }
+
+// update - hàm backtracking đưa ra kết quả 1d-vector v (có size = row) với v[i] = j là ô [i, j] thuộc seam cần xóa
 
 void highlight_seam(uchar3* original_image, uchar3* image_with_seam, int width, int height, uint32_t* back_tracking, int col_start_seam){
 	for(int row = 0; row < height; row++){
@@ -75,13 +80,14 @@ void highlight_seam(uchar3* original_image, uchar3* image_with_seam, int width, 
 }
 
 void remove_seam(uchar3* original_image, uchar3* removed_seam, int width, int height, uint32_t* back_tracking, int col_start_seam){
+	int new_width = width - 1;
 	for(int row = height - 1; row > -1; row--){
-		for(int col = 0; col < width - 1; col++){
+		for(int col = 0; col < new_width; col++){
 			int i = row * width + col;
 			if(col < col_start_seam)
-				removed_seam[(width - 1) * row + col] = original_image[i];
+				removed_seam[(new_width) * row + col] = original_image[i];
 			else
-				removed_seam[(width - 1) * row + col] = original_image[i + 1];
+				removed_seam[(new_width) * row + col] = original_image[i + 1];
 		}
 		col_start_seam = back_tracking[row * width + col_start_seam];
 	}
