@@ -184,6 +184,7 @@ int main(int argc, char** argv){
     remove_n_seam(original_image, output_image, width, height, n_seams);
 	timer.Stop();
     printf("Time: %.3f ms\n", timer.Elapsed());
+	printf("Output image size (width x height): %i x %i\n\n", width - n_seams, height);
 
     writePnm(output_image, width - n_seams, height, concatStr(file_name_out,"_device2.pnm"));
 

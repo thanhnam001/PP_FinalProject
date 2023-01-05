@@ -15,7 +15,7 @@ __global__ void convert_RGB_to_energy(uchar3* original_image, uint32_t* energy_i
 
     if(row < height && col < width){
         // Copy to shared memory
-        int s_size = blockDim.y + 2;
+        int s_size = blockDim.x + 2;
         int s_row = threadIdx.y + 1;
         int s_col = threadIdx.x + 1;
 
@@ -41,8 +41,8 @@ __global__ void convert_RGB_to_energy(uchar3* original_image, uint32_t* energy_i
         }
         if (threadIdx.y == 0) {
             // top and bottom edge in s_col
-            shared_image[1] = original_image[top * width + col];
-			shared_image[(blockDim.y + 1) * s_size + 1] = original_image[bottom * width + col];
+            shared_image[threadIdx.x + 1] = original_image[top * width + col];
+			shared_image[(blockDim.y + 1) * s_size + threadIdx.x + 1] = original_image[bottom * width + col];
         }
 
         __syncthreads();
@@ -51,9 +51,8 @@ __global__ void convert_RGB_to_energy(uchar3* original_image, uint32_t* energy_i
         int x = 0, y = 0;
         for(int r = 0; r < 3; r++){
             for(int c = 0; c < 3; c++){
-                int rc = min(max(row - 1 + r, 0), height - 1); 
-                int cc = min(max(col - 1 + c, 0), width - 1);
-                uint32_t gray_pixel = 0.299f * original_image[rc * width + cc].x + 0.587f * original_image[rc * width + cc].y + 0.114f * original_image[rc * width + cc].z;
+                uchar3 pixel = shared_image[(threadIdx.y + r) * s_size + threadIdx.x + c];
+                uint32_t gray_pixel = 0.299f * pixel.x + 0.587f * pixel.y + 0.114f * pixel.z;
                 x += gray_pixel * x_sobel[r * 3 + c];
                 y += gray_pixel * y_sobel[r * 3 + c];
             }
@@ -222,6 +221,7 @@ int main(int argc, char** argv){
     remove_n_seam(original_image, output_image, width, height, n_seams);
 	timer.Stop();
     printf("Time: %.3f ms\n", timer.Elapsed());
+	printf("Output image size (width x height): %i x %i\n\n", width - n_seams, height);
 
     writePnm(output_image, width - n_seams, height, concatStr(file_name_out,"_device3.pnm"));
 

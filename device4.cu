@@ -1,31 +1,56 @@
 #include "support.h"
 
-__global__ void convert_RGB_to_gray(uchar3* original_image, uint8_t* gray_image, int width, int height){
-    int row = blockDim.y * blockIdx.y + threadIdx.y;
-    int col = blockDim.x * blockIdx.x + threadIdx.x;
-    if(row < height && col < width){
-        int i = row * width + col;
-        gray_image[i] = 0.299f * original_image[i].x + 0.587f * original_image[i].y + 0.114f * original_image[i].z;
-    }
-}
+#define FILTER_WIDTH 3
+__constant__ short int dc_x_sobel[FILTER_WIDTH * FILTER_WIDTH];
+__constant__ short int dc_y_sobel[FILTER_WIDTH * FILTER_WIDTH];
 
-__global__ void conv_sobel(uint8_t* gray_image, uint32_t* energy_image, int width, int height){
+__global__ void convert_RGB_to_energy(uchar3* original_image, uint32_t* energy_image, int width, int height){
     int row = blockDim.y * blockIdx.y + threadIdx.y;
     int col = blockDim.x * blockIdx.x + threadIdx.x;
-    short int x_sobel[9] = { 1,  0, -1,
-					         2,  0, -2,
-					         1,  0, -1};
-	short int y_sobel[9] = { 1,  2,  1,
-					         0,  0,  0,
-					        -1, -2, -1};
+    extern __shared__ uchar3 shared_image[];
+
     if(row < height && col < width){
+        // Copy to shared memory
+        int s_size = blockDim.x + 2;
+        int s_row = threadIdx.y + 1;
+        int s_col = threadIdx.x + 1;
+
+        shared_image[s_row * s_size + s_col] = original_image[row * width + col];
+
+        // Padding edge cells
+        int left = max(0, col - 1);
+		int right = min(col + blockDim.x, width - 1);
+		int top = max(0, row - 1);
+		int bottom = min(row + blockDim.y, height - 1);
+
+        if (threadIdx.x == 0) {
+            // left and right edge in s_row
+            shared_image[s_row * s_size] = original_image[row * width + left];
+			shared_image[s_row * s_size + blockDim.x + 1] = original_image[row * width + right];
+            if (threadIdx.y == 0) {
+                // 4 corners of padding
+                shared_image[0] = original_image[top * width + left];
+				shared_image[blockDim.x + 1] = original_image[top * width + right];
+				shared_image[(blockDim.y + 1) * s_size] = original_image[bottom * width + left];
+				shared_image[(blockDim.y + 1) * s_size + blockDim.x + 1] = original_image[bottom * width + right];
+            }
+        }
+        if (threadIdx.y == 0) {
+            // top and bottom edge in s_col
+            shared_image[threadIdx.x + 1] = original_image[top * width + col];
+			shared_image[(blockDim.y + 1) * s_size + threadIdx.x + 1] = original_image[bottom * width + col];
+        }
+
+        __syncthreads();
+
+        // Compute energy
         int x = 0, y = 0;
-        for(int r = 0; r < 3; r++){
-            for(int c = 0; c < 3; c++){
-                int rc = min(max(row - 1 + r, 0), height - 1); 
-                int cc = min(max(col - 1 + c, 0), width - 1);
-                x += gray_image[rc * width + cc] * x_sobel[r * 3 + c];
-                y += gray_image[rc * width + cc] * y_sobel[r * 3 + c];
+        for(int r = 0; r < FILTER_WIDTH; r++){
+            for(int c = 0; c < FILTER_WIDTH; c++){
+                uchar3 pixel = shared_image[(threadIdx.y + r) * s_size + threadIdx.x + c];
+                uint32_t gray_pixel = 0.299f * pixel.x + 0.587f * pixel.y + 0.114f * pixel.z;
+                x += gray_pixel * dc_x_sobel[r * FILTER_WIDTH + c];
+                y += gray_pixel * dc_y_sobel[r * FILTER_WIDTH + c];
             }
         }
         energy_image[row * width + col] = abs(x) + abs(y);
@@ -108,20 +133,25 @@ __global__ void remove_seam(uchar3* in_image, uchar3* out_image, int width, int 
     }
 }
 void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int height, int n_seams){
+    short int x_sobel[FILTER_WIDTH * FILTER_WIDTH] = { 1,  0, -1,
+					                                   2,  0, -2,
+					                                   1,  0, -1};
+	short int y_sobel[FILTER_WIDTH * FILTER_WIDTH] = { 1,  2,  1,
+                                                       0,  0,  0,
+                                                      -1, -2, -1};
+    CHECK(cudaMemcpyToSymbol(dc_x_sobel, x_sobel, FILTER_WIDTH * FILTER_WIDTH * sizeof(short int)));
+    CHECK(cudaMemcpyToSymbol(dc_y_sobel, y_sobel, FILTER_WIDTH * FILTER_WIDTH * sizeof(short int)));
     uchar3 *d_original_image;
-    uint8_t *d_gray_image;
     uint32_t *d_energy_image;
     uint32_t *d_back_tracking;
     uint32_t *d_seam;
     uchar3 * d_output_image;
     uint32_t *minn, *min_indices;
     size_t n_bytes_uchar3 = width * height * sizeof(uchar3);
-    size_t n_bytes_uint8t = width * height * sizeof(uint8_t);
     size_t n_bytes_uint32t = width * height * sizeof(uint32_t);
     size_t n_bytes_row = width * sizeof(uint32_t);
     size_t n_bytes_height = height * sizeof(uint32_t);
     CHECK(cudaMalloc(&d_original_image, n_bytes_uchar3));
-    CHECK(cudaMalloc(&d_gray_image, n_bytes_uint8t));
     CHECK(cudaMalloc(&d_energy_image, n_bytes_uint32t));
     CHECK(cudaMalloc(&d_back_tracking, n_bytes_uint32t));
     CHECK(cudaMalloc(&d_seam, n_bytes_height));
@@ -141,11 +171,8 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
         CHECK(cudaMemcpyToSymbol(b_count , &z, sizeof(int)));
         CHECK(cudaMemcpyToSymbol(b_count1, &z, sizeof(int)));
 
-        // Convert RGB to gray
-        convert_RGB_to_gray<<<grid_size2d, block_size2d>>>(d_original_image, d_gray_image, width, height);
-
-        // Calculate energy image
-        conv_sobel<<<grid_size2d, block_size2d>>>(d_gray_image, d_energy_image, width, height);
+        // Convert RGB to gray and calculate energy
+        convert_RGB_to_energy<<<grid_size2d, block_size2d, (block_size2d.x + 2) * (block_size2d.y + 2) * sizeof(uchar3)>>>(d_original_image, d_energy_image, width, height);
         
         // Find all seam (from top row to bottom row)
         for(int row = 1; row < height; row++)
@@ -173,7 +200,6 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
     CHECK(cudaMemcpy(out_image, d_original_image, sizeof(uchar3) * width * height, cudaMemcpyDeviceToHost));
 
     CHECK(cudaFree(d_original_image));
-    CHECK(cudaFree(d_gray_image));
     CHECK(cudaFree(d_energy_image));
     CHECK(cudaFree(d_back_tracking));
     CHECK(cudaFree(d_seam));
@@ -201,7 +227,7 @@ int main(int argc, char** argv){
     printf("Time: %.3f ms\n", timer.Elapsed());
 	printf("Output image size (width x height): %i x %i\n\n", width - n_seams, height);
 
-    writePnm(output_image, width - n_seams, height, concatStr(file_name_out,"_device1.pnm"));
+    writePnm(output_image, width - n_seams, height, concatStr(file_name_out,"_device4.pnm"));
 
     free(original_image);
     free(output_image);
