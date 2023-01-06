@@ -127,7 +127,7 @@ __device__ void warp_reduce(volatile uint32_t* s_data, volatile uint32_t* s_min_
 __global__ void find_min_index(uint32_t* last_row, uint32_t* minn, int n, uint32_t* min_indices){
     extern __shared__ uint32_t s[];
     uint32_t *s_data = (uint32_t*)s;
-    uint32_t *s_min_indices = (uint32_t*)&s_data[blockDim.x]; // == data[i] = data + i (+ 4)
+    uint32_t *s_min_indices = (uint32_t*)&s_data[blockDim.x];
     int i = blockIdx.x * blockDim.x * 2 + threadIdx.x;
     int grid_size = blockDim.x * 2 * gridDim.x;
     s_min_indices[threadIdx.x] = i < n ? i : 0;
@@ -234,7 +234,6 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
     dim3 grid_size1d2((width - 1) / block_size1d.x / 2+ 1);
     uint32_t *minn = (uint32_t*)malloc(grid_size1d2.x * sizeof(uint32_t));
     uint32_t *min_indices = (uint32_t*)malloc(grid_size1d2.x * sizeof(uint32_t));
-    uint32_t* accum_last_row = (uint32_t*)malloc(width * sizeof(uint32_t));   
     for(int i = 0; i < n_seams; i++){
         // Convert RGB to gray and calculate energy
         convert_RGB_to_energy<<<grid_size2d, block_size2d, (block_size2d.x + 2) * (block_size2d.y + 2) * sizeof(uchar3)>>>(d_original_image, d_energy_image, width, height);
@@ -244,16 +243,6 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
             find_seam<<<grid_size1d, block_size1d>>>(d_energy_image, d_back_tracking, width, height, row);
 
         // Find min seam
-        // CHECK(cudaMemcpy(accum_last_row, d_energy_image + width * (height - 1), n_bytes_row,cudaMemcpyDeviceToHost));
-        // uint32_t tempp = UINT32_MAX;
-        // uint32_t col_start_seam2;
-
-        // for(int i = 0; i < width; i++){
-        //     if(accum_last_row[i] < tempp){
-        //         tempp = accum_last_row[i];
-        //         col_start_seam2 = i;
-        //     }
-        // }
         find_min_index<<<grid_size1d2, block_size1d, 3 * block_size1d.x * sizeof(uint32_t)>>>(d_energy_image + width * (height - 1), d_minn, width, d_min_indices);
         CHECK(cudaMemcpy(minn, d_minn, grid_size1d2.x * sizeof(uint32_t), cudaMemcpyDeviceToHost));
         CHECK(cudaMemcpy(min_indices, d_min_indices, grid_size1d2.x * sizeof(uint32_t), cudaMemcpyDeviceToHost));
@@ -264,10 +253,6 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
             }
         }
         col_start_seam = min_indices[0];
-        // if(col_start_seam!=col_start_seam2){
-        //     printf("Col start seam host: %u\n", col_start_seam2);
-        //     printf("Col start seam device: %u\n", col_start_seam);
-        // }
         // Get seam to delete from backtracking
         CHECK(cudaMemcpy(back_tracking, d_back_tracking, n_bytes_uint32t, cudaMemcpyDeviceToHost));
         seam[height - 1] = col_start_seam;
@@ -296,7 +281,6 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
     free(min_indices);
     free(seam);
     free(back_tracking);
-    free(accum_last_row);
 }
 
 int main(int argc, char** argv){

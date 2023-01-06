@@ -38,10 +38,10 @@ void conv_sobel(uint8_t* gray_image, uint32_t* energy_image, int width, int heig
 
 int find_seam(uint32_t* energy_image, uint32_t* back_tracking, int width, int height){
 	uint32_t col_start_seam, energy_start_seam = UINT32_MAX;
-	for(int row = 0; row < height; row++){
+	for(int row = 1; row < height; row++){
 		for(int col = 0; col < width; col++){
 			int p = row * width + col;
-			if(row != 0){	// for từ row=1 luôn ko cần if???
+			// if(row != 0){	// for từ row=1 luôn ko cần if???
 				uint32_t temp = UINT32_MAX;
 
 				// update - ko cần for
@@ -58,7 +58,7 @@ int find_seam(uint32_t* energy_image, uint32_t* back_tracking, int width, int he
 					energy_start_seam = energy_image[p];
 					col_start_seam = col;
 				}
-			}
+			// }
 		}
 	}
 	return col_start_seam;
