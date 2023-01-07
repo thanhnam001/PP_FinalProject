@@ -73,36 +73,116 @@ __global__ void find_seam(uint32_t* energy_image, uint32_t* back_tracking, int w
     }
 }
 
-__global__ void find_min_index(uint32_t* last_row, int n, uint32_t* min_indices){
+__device__ void warp_reduce(volatile uint32_t* s_data, volatile uint32_t* s_min_indices, unsigned int tid){
+    if(blockDim.x >= 64){
+        if(s_data[tid + 32] < s_data[tid]){
+            s_data[tid] = s_data[tid + 32];
+            s_min_indices[tid] = s_min_indices[tid + 32];
+        } 
+        else if(s_data[tid + 32] == s_data[tid])
+            s_min_indices[tid] = min(s_min_indices[tid], s_min_indices[tid + 32]);
+    }
+    if(blockDim.x >= 32){
+        if(s_data[tid + 16] < s_data[tid]){
+            s_data[tid] = s_data[tid + 16];
+            s_min_indices[tid] = s_min_indices[tid + 16];
+        } 
+        else if(s_data[tid + 16] == s_data[tid])
+            s_min_indices[tid] = min(s_min_indices[tid], s_min_indices[tid + 16]);
+    }
+    if(blockDim.x >= 16){
+        if(s_data[tid + 8] < s_data[tid]){
+            s_data[tid] = s_data[tid + 8];
+            s_min_indices[tid] = s_min_indices[tid + 8];
+        } 
+        else if(s_data[tid + 8] == s_data[tid])
+            s_min_indices[tid] = min(s_min_indices[tid], s_min_indices[tid + 8]);
+    }
+    if(blockDim.x >= 8){
+        if(s_data[tid + 4] < s_data[tid]){
+            s_data[tid] = s_data[tid + 4];
+            s_min_indices[tid] = s_min_indices[tid + 4];
+        } 
+        else if(s_data[tid + 4] == s_data[tid])
+            s_min_indices[tid] = min(s_min_indices[tid], s_min_indices[tid + 4]);
+    }
+    if(blockDim.x >= 4){
+        if(s_data[tid + 2] < s_data[tid]){
+            s_data[tid] = s_data[tid + 2];
+            s_min_indices[tid] = s_min_indices[tid + 2];
+        } 
+        else if(s_data[tid + 2] == s_data[tid])
+            s_min_indices[tid] = min(s_min_indices[tid], s_min_indices[tid + 2]);
+    }
+    if(blockDim.x >= 2){
+        if(s_data[tid + 1] < s_data[tid]){
+            s_data[tid] = s_data[tid + 1];
+            s_min_indices[tid] = s_min_indices[tid + 1];
+        } 
+        else if(s_data[tid + 1] == s_data[tid])
+            s_min_indices[tid] = min(s_min_indices[tid], s_min_indices[tid + 1]);
+    }
+}
+
+__global__ void find_min_index(uint32_t* last_row, uint32_t* minn, int n, uint32_t* min_indices){
+    extern __shared__ uint32_t s[];
+    uint32_t *s_data = (uint32_t*)s;
+    uint32_t *s_min_indices = (uint32_t*)&s_data[blockDim.x];
     int i = blockIdx.x * blockDim.x * 2 + threadIdx.x;
-
-    extern __shared__ uint32_t s_mem[];
-    uint32_t *s_last_row = s_mem;
-    uint32_t *s_min_indices = &s_mem[n];
-
-    if (i < n) {
-        s_last_row[i] = last_row[i];
-        s_min_indices[threadIdx.x] = i;
-    }
-    else return;
-    if (i + blockDim.x < n) {
-        s_last_row[i + blockDim.x] = last_row[i + blockDim.x];
-        s_min_indices[threadIdx.x + blockDim.x] = i + blockDim.x;
-    }
+    int grid_size = blockDim.x * 2 * gridDim.x;
+    s_min_indices[threadIdx.x] = i < n ? i : 0;
+    s_min_indices[threadIdx.x + blockDim.x] = i + blockDim.x < n ? i + blockDim.x : 0;
     __syncthreads();
-
-    // min reduce
-    for (int stride = blockDim.x; stride > threadIdx.x; stride >>= 1) {
-        if (i + stride < n) {
-            if (s_last_row[s_min_indices[threadIdx.x]] > s_last_row[s_min_indices[threadIdx.x + stride]]) {
-                s_min_indices[threadIdx.x] = s_min_indices[threadIdx.x + stride];
+    if(i >= n)
+        s_data[threadIdx.x] = UINT32_MAX;
+    while(i < n){
+        s_data[threadIdx.x] = last_row[i];
+        if(i + blockDim.x < n){
+            if (last_row[i] > last_row[i + blockDim.x]){
+                s_data[threadIdx.x] = last_row[i + blockDim.x];
+                s_min_indices[threadIdx.x] = s_min_indices[threadIdx.x + blockDim.x];
             }
         }
-        
+        i += grid_size;
+    }
+    __syncthreads();
+    if(blockDim.x >= 512){
+        if(threadIdx.x < 256){
+            if (s_data[threadIdx.x + 256] < s_data[threadIdx.x]){
+                s_data[threadIdx.x] = s_data[threadIdx.x + 256];
+                s_min_indices[threadIdx.x] = s_min_indices[threadIdx.x + 256];
+            } 
+            else if (s_data[threadIdx.x + 256] == s_data[threadIdx.x])
+                s_min_indices[threadIdx.x] = min(s_min_indices[threadIdx.x], s_min_indices[threadIdx.x + 256]);
+        }
         __syncthreads();
     }
-
-    if (threadIdx.x == 0) {
+    if(blockDim.x >= 256){
+        if(threadIdx.x < 128){
+            if (s_data[threadIdx.x + 128] < s_data[threadIdx.x]){
+                s_data[threadIdx.x] = s_data[threadIdx.x + 128];
+                s_min_indices[threadIdx.x] = s_min_indices[threadIdx.x + 128];
+            } 
+            else if (s_data[threadIdx.x + 128] == s_data[threadIdx.x])
+                s_min_indices[threadIdx.x] = min(s_min_indices[threadIdx.x], s_min_indices[threadIdx.x + 128]);
+        }
+        __syncthreads();
+    }
+    if(blockDim.x >= 128){
+        if(threadIdx.x < 64){
+            if (s_data[threadIdx.x + 64] < s_data[threadIdx.x]){
+                s_data[threadIdx.x] = s_data[threadIdx.x + 64];
+                s_min_indices[threadIdx.x] = s_min_indices[threadIdx.x + 64];
+            } 
+            else if (s_data[threadIdx.x + 64] == s_data[threadIdx.x])
+                s_min_indices[threadIdx.x] = min(s_min_indices[threadIdx.x], s_min_indices[threadIdx.x + 64]);
+        }
+        __syncthreads();
+    }
+    if(threadIdx.x < 32)
+        warp_reduce(s_data, s_min_indices, threadIdx.x);
+    if(threadIdx.x == 0){
+        minn[blockIdx.x] = s_data[0];
         min_indices[blockIdx.x] = s_min_indices[0];
     }
 }
@@ -131,10 +211,10 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
     uint32_t *d_back_tracking;
     uint32_t *d_seam;
     uchar3 * d_output_image;
-    uint32_t *d_min_indices;
+    uint32_t *d_minn, *d_min_indices;
     size_t n_bytes_uchar3 = width * height * sizeof(uchar3);
     size_t n_bytes_uint32t = width * height * sizeof(uint32_t);
-    // size_t n_bytes_row = width * sizeof(uint32_t);
+    size_t n_bytes_row = width * sizeof(uint32_t);
     size_t n_bytes_height = height * sizeof(uint32_t);
     CHECK(cudaMalloc(&d_original_image, n_bytes_uchar3));
     CHECK(cudaMalloc(&d_energy_image, n_bytes_uint32t));
@@ -142,6 +222,8 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
     CHECK(cudaMalloc(&d_seam, n_bytes_height));
     CHECK(cudaMalloc(&d_output_image, n_bytes_uchar3));
     CHECK(cudaMemcpy(d_original_image, original_image, n_bytes_uchar3, cudaMemcpyHostToDevice));
+    CHECK(cudaMalloc(&d_minn, n_bytes_row));
+    CHECK(cudaMalloc(&d_min_indices, n_bytes_row));
     uint32_t* seam = (uint32_t*)malloc(n_bytes_height);
     uint32_t* back_tracking = (uint32_t*)malloc(n_bytes_uint32t);
     dim3 block_size2d(32,32);
@@ -149,7 +231,9 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
     dim3 block_size1d(512);
     dim3 grid_size1d((width - 1) / block_size1d.x + 1);
     uint32_t col_start_seam;
-    
+    dim3 grid_size1d2((width - 1) / block_size1d.x / 2+ 1);
+    uint32_t *minn = (uint32_t*)malloc(grid_size1d2.x * sizeof(uint32_t));
+    uint32_t *min_indices = (uint32_t*)malloc(grid_size1d2.x * sizeof(uint32_t));
     for(int i = 0; i < n_seams; i++){
         // Convert RGB to gray and calculate energy
         convert_RGB_to_energy<<<grid_size2d, block_size2d, (block_size2d.x + 2) * (block_size2d.y + 2) * sizeof(uchar3)>>>(d_original_image, d_energy_image, width, height);
@@ -159,27 +243,16 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
             find_seam<<<grid_size1d, block_size1d>>>(d_energy_image, d_back_tracking, width, height, row);
 
         // Find min seam
-        dim3 blockSize(128);
-        dim3 gridSize((width - 1) / (2 * blockSize.x) + 1);
-        CHECK(cudaMalloc(&d_min_indices, gridSize.x * sizeof(uint32_t)));
-        uint32_t *min_indices = (uint32_t*)malloc(gridSize.x * sizeof(uint32_t));
-        uint32_t *last_row = d_energy_image + width * (height - 1);
-
-        find_min_index<<<gridSize, blockSize, (2 * blockSize.x + width) * sizeof(uint32_t)>>>(last_row, width, d_min_indices);
-        CHECK(cudaMemcpy(min_indices, d_min_indices, gridSize.x * sizeof(uint32_t), cudaMemcpyDeviceToHost));
-
-        col_start_seam = min_indices[0];
-        last_row = (uint32_t*)malloc(width * sizeof(uint32_t));
-        CHECK(cudaMemcpy(last_row, d_energy_image + width * (height - 1), width * sizeof(uint32_t), cudaMemcpyDeviceToHost));
-        for (int j = 1; j < gridSize.x; ++j) {
-            if (last_row[min_indices[j]] < last_row[col_start_seam])
-                col_start_seam = min_indices[j];
+        find_min_index<<<grid_size1d2, block_size1d, 3 * block_size1d.x * sizeof(uint32_t)>>>(d_energy_image + width * (height - 1), d_minn, width, d_min_indices);
+        CHECK(cudaMemcpy(minn, d_minn, grid_size1d2.x * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+        CHECK(cudaMemcpy(min_indices, d_min_indices, grid_size1d2.x * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+        for(int i = 0; i < grid_size1d2.x; i++){
+            if(minn[i] < minn[0]){
+                minn[0] = minn[i];
+                min_indices[0] = min_indices[i];
+            }
         }
-        cudaDeviceSynchronize();
-		CHECK(cudaGetLastError());
-        CHECK(cudaFree(d_min_indices));
-        free(min_indices);
-        free(last_row);
+        col_start_seam = min_indices[0];
         // Get seam to delete from backtracking
         CHECK(cudaMemcpy(back_tracking, d_back_tracking, n_bytes_uint32t, cudaMemcpyDeviceToHost));
         seam[height - 1] = col_start_seam;
@@ -202,6 +275,10 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
     CHECK(cudaFree(d_back_tracking));
     CHECK(cudaFree(d_seam));
     CHECK(cudaFree(d_output_image));
+    CHECK(cudaFree(d_minn));
+    CHECK(cudaFree(d_min_indices));
+    free(minn);
+    free(min_indices);
     free(seam);
     free(back_tracking);
 }
