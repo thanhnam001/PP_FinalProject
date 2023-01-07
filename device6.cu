@@ -76,8 +76,9 @@ __global__ void find_seam(uint32_t* energy_image, uint32_t* back_tracking, int w
 __global__ void find_min_index(uint32_t* last_row, int n, uint32_t* min_indices){
     int i = blockIdx.x * blockDim.x * 2 + threadIdx.x;
 
-    extern __shared__ uint32_t s_last_row[];
-    extern __shared__ uint32_t s_min_indices[];
+    extern __shared__ uint32_t s_mem[];
+    uint32_t *s_last_row = s_mem;
+    uint32_t *s_min_indices = &s_mem[n];
 
     if (i < n) {
         s_last_row[i] = last_row[i];
@@ -93,7 +94,7 @@ __global__ void find_min_index(uint32_t* last_row, int n, uint32_t* min_indices)
     // min reduce
     for (int stride = blockDim.x; stride > threadIdx.x; stride >>= 1) {
         if (i + stride < n) {
-            if (last_row[s_min_indices[threadIdx.x]] > last_row[s_min_indices[threadIdx.x + stride]]) {
+            if (s_last_row[s_min_indices[threadIdx.x]] > s_last_row[s_min_indices[threadIdx.x + stride]]) {
                 s_min_indices[threadIdx.x] = s_min_indices[threadIdx.x + stride];
             }
         }
@@ -164,7 +165,7 @@ void remove_n_seam(uchar3* original_image, uchar3* out_image, int width, int hei
         uint32_t *min_indices = (uint32_t*)malloc(gridSize.x * sizeof(uint32_t));
         uint32_t *last_row = d_energy_image + width * (height - 1);
 
-        find_min_index<<<gridSize, block_size1d, (2 * blockSize.x + width) * sizeof(uint32_t)>>>(last_row, width, d_min_indices);
+        find_min_index<<<gridSize, blockSize, (2 * blockSize.x + width) * sizeof(uint32_t)>>>(last_row, width, d_min_indices);
         CHECK(cudaMemcpy(min_indices, d_min_indices, gridSize.x * sizeof(uint32_t), cudaMemcpyDeviceToHost));
 
         col_start_seam = min_indices[0];
